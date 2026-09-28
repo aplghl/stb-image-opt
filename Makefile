@@ -16,7 +16,7 @@ EXACT_FLAGS ?= -O3 -march=x86-64-v2 -ffp-contract=off
 FAST_FLAGS  ?= -O3 -march=x86-64-v2 -ffast-math
 PORTABLE_FLAGS ?= -O2
 
-.PHONY: all verify verify-portable dispatch sanitize fuzz bench bench-vs-upstream \
+.PHONY: all verify verify-portable dispatch idct-check sanitize fuzz bench bench-vs-upstream \
         kernels corpus clean help
 
 all: verify
@@ -25,10 +25,15 @@ all: verify
 verify:
 	bash harness/diff.sh $(EXACT_FLAGS)
 	bash harness/dispatch.sh $(EXACT_FLAGS)
+	bash harness/idct_check.sh
 
 ## Retained for API parity with the other forks.
 dispatch:
 	bash harness/dispatch.sh $(EXACT_FLAGS)
+
+## Isolated AVX2 two-block IDCT check (vs SSE2 reference).
+idct-check:
+	bash harness/idct_check.sh
 
 ## Portability matrix: SSEx-only, no-SIMD, format toggles, cross-targets.
 verify-portable:

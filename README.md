@@ -5,22 +5,22 @@
 [![License: MIT OR Unlicense](https://img.shields.io/badge/license-MIT%20OR%20Unlicense-blue.svg)](#license)
 
 A performance fork of [stb_image](https://github.com/nothings/stb) (`stb_image.h`
-v2.30) with a **runtime-dispatched AVX2** fast path, a reproducible PGO build
-recipe, and a bit-exact differential harness. Optimize once, and every consumer
-of the header or the prebuilt library benefits — with **no source or build
-changes** and **identical decoded output**.
+v2.30) with **runtime-dispatched AVX2** fast paths (JPEG IDCT and YCbCr→RGB), a
+reproducible PGO build recipe, and a bit-exact differential harness. Optimize
+once, and every consumer of the header or the prebuilt library benefits — with
+**no source or build changes** and **identical decoded output**.
 
 - **Upstream base:** `nothings/stb` @ `2c980bb` (`stb_image.h` v2.30), vendored
   in `upstream/` as the pristine oracle.
 - **License:** MIT OR Unlicense, same as upstream. See [License](#license).
 - **Scope:** `stb_image.h` only (the read/decoding side).
-- **Status:** exact build is bit-identical to upstream; the AVX2 path is selected
-  at runtime and falls back to SSE2/scalar on older CPUs.
+- **Status:** exact build is bit-identical to upstream; the AVX2 paths are selected
+  at runtime and fall back to SSE2/scalar on older CPUs.
 - **Downloads:** prebuilt static libraries for Linux (glibc/musl), Linux ARM64
   and Windows are attached to [releases](https://github.com/aplghl/stb-image-opt/releases)
   — see [Prebuilt releases](#prebuilt-releases).
 
-Only **`src/stb_image.h`** is modified: +243/−1 lines, all additive and guarded.
+Only **`src/stb_image.h`** is modified: +485/−2 lines, all additive and guarded.
 The public API, structs, ABI and default behavior are unchanged.
 
 ## Results
@@ -32,11 +32,17 @@ WSL2. Reproduce with `make bench-vs-upstream`.
 
 | workload | speedup vs upstream `-O2` |
 | --- | --- |
-| Mixed suite (`results/summary.csv`) | **+6.3%** geomean |
+| Mixed suite (`results/summary.csv`) | **≈ +5%** geomean |
 | JPEG → RGBA (`req_comp=4`) | **≈ +13%** geomean |
 | GIF decode | **+20%** |
 | progressive JPEG | **+14%** |
 | AVX2 YCbCr kernel vs SSE2 (isolated) | **1.63×** |
+| AVX2 IDCT pair kernel vs SSE2 (isolated) | **1.81×** |
+
+The IDCT pair kernel adds **≈ +4–8%** on JPEG decoding (`req_comp` 0–4,
+measured by dispatching AVX2 vs SSE2 on the same build), on top of the PGO and
+YCbCr gains. It is the largest JPEG compute step and, unlike the YCbCr kernel,
+accelerates every output channel count.
 
 The exact build is **bit-identical** to upstream on the whole corpus
 (`upstream/tests/pngsuite` + generated corpus: ~12,300 checks across
@@ -119,18 +125,28 @@ Not shipped — build from source instead: **macOS**
 
 ## What changed
 
-`stbi__YCbCr_to_RGB_avx2` — a 16-pixel-wide AVX2 YCbCr→RGB kernel (used for
-4-channel output, the same case the existing SSE2 path accelerates). Each lane
-reproduces the SSE2 integer math and the SSE2 pack/interleave byte-for-byte, so
-the output is bit-identical; only the interleave is widened to true 256-bit
-using two cross-lane permutes.
+Two runtime-dispatched AVX2 kernels, plus the dispatch plumbing:
+
+1. `stbi__YCbCr_to_RGB_avx2` — a 16-pixel-wide AVX2 YCbCr→RGB kernel (used for
+   4-channel output, the same case the existing SSE2 path accelerates). Each
+   lane reproduces the SSE2 integer math and the SSE2 pack/interleave
+   byte-for-byte, so the output is bit-identical; only the interleave is widened
+   to true 256-bit using two cross-lane permutes.
+
+2. `stbi__idct_block_avx2` — the JPEG IDCT, processing **two 8×8 blocks at once**
+   (one per 128-bit lane). It is a direct widening of `stbi__idct_simd`: every
+   operation it uses (`madd`, `unpacklo/hi`, `packs`, `packus`, `srai`) is
+   in-lane on AVX2, so each half runs the exact SSE2 recipe and is byte-for-byte
+   identical. Callers pair adjacent blocks in the baseline, non-interleaved and
+   progressive IDCT loops and fall back to the SSE2 kernel for leftovers.
 
 Dispatch is added cleanly on top of stb's existing model:
 
 ```c
 #ifdef STBI_AVX2
    if (stbi__avx2_available()) {
-      j->YCbCr_to_RGB_kernel = stbi__YCbCr_to_RGB_avx2;
+      j->YCbCr_to_RGB_kernel  = stbi__YCbCr_to_RGB_avx2;
+      j->idct_block_pair_kernel = stbi__idct_block_avx2; // NULL otherwise
    }
 #endif
 ```
@@ -151,6 +167,7 @@ corpus — no other setup.
 ```sh
 make verify            # all dispatch paths bit-exact vs pristine oracle
 make verify-portable   # SSE-only / no-SIMD / ONLY_* / C++ / zig cross-targets
+make idct-check        # isolated AVX2 two-block IDCT vs SSE2 reference
 make sanitize          # ASan+UBSan over corpus, truncations, mutations
 make fuzz ARGS=120     # libFuzzer
 make bench-vs-upstream # head-to-head vs upstream -O2 -> results/summary.csv

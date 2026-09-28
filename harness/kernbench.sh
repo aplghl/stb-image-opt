@@ -15,7 +15,7 @@ $CC $FLAGS -I "$ROOT/src" "$ROOT/bench/kernbench.c" -lm -o "$BUILD/kernbench" ||
 
 CSV="$RES/kernels.csv"
 echo "kernel,n,iters,ns_per_pixel" > "$CSV"
-for k in ycbcr_scalar ycbcr_sse2 ycbcr_avx2; do
+for k in ycbcr_scalar ycbcr_sse2 ycbcr_avx2 idct_scalar idct_sse2 idct_avx2; do
     line=$(taskset -c "$PIN" "$BUILD/kernbench" "$k" "$N" "$ITERS")
     echo "$line" >> "$CSV"
     echo "$line"
@@ -26,4 +26,7 @@ d = {r["kernel"]: float(r["ns_per_pixel"]) for r in csv.DictReader(open(sys.argv
 if d.get("ycbcr_sse2") and d.get("ycbcr_avx2"):
     print(f"ycbcr: avx2 vs sse2 = {d['ycbcr_sse2']/d['ycbcr_avx2']:.3f}x, "
           f"vs scalar = {d['ycbcr_scalar']/d['ycbcr_avx2']:.3f}x")
+if d.get("idct_sse2") and d.get("idct_avx2"):
+    print(f"idct:  avx2 vs sse2 = {d['idct_sse2']/d['idct_avx2']:.3f}x, "
+          f"vs scalar = {d['idct_scalar']/d['idct_avx2']:.3f}x")
 PY

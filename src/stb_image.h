@@ -2056,6 +2056,9 @@ typedef struct
 
 // kernels
    void (*idct_block_kernel)(stbi_uc *out, int out_stride, short data[64]);
+   // Optional two-block IDCT (AVX2); NULL when unavailable. The two blocks are
+   // 8 horizontally adjacent pixels in the output, so out1 == out0 + 8.
+   void (*idct_block_pair_kernel)(stbi_uc *out0, stbi_uc *out1, int out_stride, const short data0[64], const short data1[64]);
    void (*YCbCr_to_RGB_kernel)(stbi_uc *out, const stbi_uc *y, const stbi_uc *pcb, const stbi_uc *pcr, int count, int step);
    stbi_uc *(*resample_row_hv_2_kernel)(stbi_uc *out, stbi_uc *in_near, stbi_uc *in_far, int w, int hs);
 } stbi__jpeg;
@@ -2764,6 +2767,185 @@ static void stbi__idct_simd(stbi_uc *out, int out_stride, short data[64])
 
 #endif // STBI_SSE2
 
+#ifdef STBI_AVX2
+// AVX2 two-block integer IDCT: two 8x8 blocks at once, one per 128-bit lane.
+// A direct widening of stbi__idct_simd: every operation it uses (madd,
+// unpacklo/hi, packs, packus, srai, add/sub) is in-lane on AVX2, so each
+// 128-bit half runs the exact SSE2 recipe and is byte-identical to a separate
+// stbi__idct_simd call. Callers pair adjacent blocks and fall back to
+// stbi__idct_simd for leftovers. See NOTES.md.
+static STBI_TARGET_AVX2 STBI__NOINLINE
+void stbi__idct_block_avx2(stbi_uc *out0, stbi_uc *out1, int out_stride,
+                           const short data0[64], const short data1[64])
+{
+   __m256i row0, row1, row2, row3, row4, row5, row6, row7;
+   __m256i tmp;
+
+   #define dct_const(x,y)  _mm256_setr_epi16((x),(y),(x),(y),(x),(y),(x),(y),(x),(y),(x),(y),(x),(y),(x),(y))
+
+   #define dct_rot(out0,out1, x,y,c0,c1) \
+      __m256i c0##lo = _mm256_unpacklo_epi16((x),(y)); \
+      __m256i c0##hi = _mm256_unpackhi_epi16((x),(y)); \
+      __m256i out0##_l = _mm256_madd_epi16(c0##lo, c0); \
+      __m256i out0##_h = _mm256_madd_epi16(c0##hi, c0); \
+      __m256i out1##_l = _mm256_madd_epi16(c0##lo, c1); \
+      __m256i out1##_h = _mm256_madd_epi16(c0##hi, c1)
+
+   #define dct_widen(out, in) \
+      __m256i out##_l = _mm256_srai_epi32(_mm256_unpacklo_epi16(_mm256_setzero_si256(), (in)), 4); \
+      __m256i out##_h = _mm256_srai_epi32(_mm256_unpackhi_epi16(_mm256_setzero_si256(), (in)), 4)
+
+   #define dct_wadd(out, a, b) \
+      __m256i out##_l = _mm256_add_epi32(a##_l, b##_l); \
+      __m256i out##_h = _mm256_add_epi32(a##_h, b##_h)
+
+   #define dct_wsub(out, a, b) \
+      __m256i out##_l = _mm256_sub_epi32(a##_l, b##_l); \
+      __m256i out##_h = _mm256_sub_epi32(a##_h, b##_h)
+
+   #define dct_bfly32o(out0, out1, a,b,bias,s) \
+      { \
+         __m256i abiased_l = _mm256_add_epi32(a##_l, bias); \
+         __m256i abiased_h = _mm256_add_epi32(a##_h, bias); \
+         dct_wadd(sum, abiased, b); \
+         dct_wsub(dif, abiased, b); \
+         out0 = _mm256_packs_epi32(_mm256_srai_epi32(sum_l, s), _mm256_srai_epi32(sum_h, s)); \
+         out1 = _mm256_packs_epi32(_mm256_srai_epi32(dif_l, s), _mm256_srai_epi32(dif_h, s)); \
+      }
+
+   #define dct_interleave8(a, b) \
+      tmp = a; \
+      a = _mm256_unpacklo_epi8(a, b); \
+      b = _mm256_unpackhi_epi8(tmp, b)
+
+   #define dct_interleave16(a, b) \
+      tmp = a; \
+      a = _mm256_unpacklo_epi16(a, b); \
+      b = _mm256_unpackhi_epi16(tmp, b)
+
+   #define dct_pass(bias,shift) \
+      { \
+         /* even part */ \
+         dct_rot(t2e,t3e, row2,row6, rot0_0,rot0_1); \
+         __m256i sum04 = _mm256_add_epi16(row0, row4); \
+         __m256i dif04 = _mm256_sub_epi16(row0, row4); \
+         dct_widen(t0e, sum04); \
+         dct_widen(t1e, dif04); \
+         dct_wadd(x0, t0e, t3e); \
+         dct_wsub(x3, t0e, t3e); \
+         dct_wadd(x1, t1e, t2e); \
+         dct_wsub(x2, t1e, t2e); \
+         /* odd part */ \
+         dct_rot(y0o,y2o, row7,row3, rot2_0,rot2_1); \
+         dct_rot(y1o,y3o, row5,row1, rot3_0,rot3_1); \
+         __m256i sum17 = _mm256_add_epi16(row1, row7); \
+         __m256i sum35 = _mm256_add_epi16(row3, row5); \
+         dct_rot(y4o,y5o, sum17,sum35, rot1_0,rot1_1); \
+         dct_wadd(x4, y0o, y4o); \
+         dct_wadd(x5, y1o, y5o); \
+         dct_wadd(x6, y2o, y5o); \
+         dct_wadd(x7, y3o, y4o); \
+         dct_bfly32o(row0,row7, x0,x7,bias,shift); \
+         dct_bfly32o(row1,row6, x1,x6,bias,shift); \
+         dct_bfly32o(row2,row5, x2,x5,bias,shift); \
+         dct_bfly32o(row3,row4, x3,x4,bias,shift); \
+      }
+
+   __m256i rot0_0 = dct_const(stbi__f2f(0.5411961f), stbi__f2f(0.5411961f) + stbi__f2f(-1.847759065f));
+   __m256i rot0_1 = dct_const(stbi__f2f(0.5411961f) + stbi__f2f( 0.765366865f), stbi__f2f(0.5411961f));
+   __m256i rot1_0 = dct_const(stbi__f2f(1.175875602f) + stbi__f2f(-0.899976223f), stbi__f2f(1.175875602f));
+   __m256i rot1_1 = dct_const(stbi__f2f(1.175875602f), stbi__f2f(1.175875602f) + stbi__f2f(-2.562915447f));
+   __m256i rot2_0 = dct_const(stbi__f2f(-1.961570560f) + stbi__f2f( 0.298631336f), stbi__f2f(-1.961570560f));
+   __m256i rot2_1 = dct_const(stbi__f2f(-1.961570560f), stbi__f2f(-1.961570560f) + stbi__f2f( 3.072711026f));
+   __m256i rot3_0 = dct_const(stbi__f2f(-0.390180644f) + stbi__f2f( 2.053119869f), stbi__f2f(-0.390180644f));
+   __m256i rot3_1 = dct_const(stbi__f2f(-0.390180644f), stbi__f2f(-0.390180644f) + stbi__f2f( 1.501321110f));
+
+   __m256i bias_0 = _mm256_set1_epi32(512);
+   __m256i bias_1 = _mm256_set1_epi32(65536 + (128<<17));
+
+   // row i = (data0 row i | data1 row i), one 8x8 block per 128-bit lane
+   #define dct_loadrow(off) \
+      _mm256_inserti128_si256( \
+         _mm256_castsi128_si256(_mm_load_si128((const __m128i *) (data0 + (off)))), \
+         _mm_load_si128((const __m128i *) (data1 + (off))), 1)
+
+   row0 = dct_loadrow(0*8);
+   row1 = dct_loadrow(1*8);
+   row2 = dct_loadrow(2*8);
+   row3 = dct_loadrow(3*8);
+   row4 = dct_loadrow(4*8);
+   row5 = dct_loadrow(5*8);
+   row6 = dct_loadrow(6*8);
+   row7 = dct_loadrow(7*8);
+
+   // column pass
+   dct_pass(bias_0, 10);
+
+   {
+      // 16bit 8x8 transpose, per lane
+      dct_interleave16(row0, row4);
+      dct_interleave16(row1, row5);
+      dct_interleave16(row2, row6);
+      dct_interleave16(row3, row7);
+
+      dct_interleave16(row0, row2);
+      dct_interleave16(row1, row3);
+      dct_interleave16(row4, row6);
+      dct_interleave16(row5, row7);
+
+      dct_interleave16(row0, row1);
+      dct_interleave16(row2, row3);
+      dct_interleave16(row4, row5);
+      dct_interleave16(row6, row7);
+   }
+
+   // row pass
+   dct_pass(bias_1, 17);
+
+   {
+      __m256i p0 = _mm256_packus_epi16(row0, row1); // a0a1...a7b0b1...b7 per lane
+      __m256i p1 = _mm256_packus_epi16(row2, row3);
+      __m256i p2 = _mm256_packus_epi16(row4, row5);
+      __m256i p3 = _mm256_packus_epi16(row6, row7);
+
+      // 8bit 8x8 transpose, per lane
+      dct_interleave8(p0, p2);
+      dct_interleave8(p1, p3);
+      dct_interleave8(p0, p1);
+      dct_interleave8(p2, p3);
+      dct_interleave8(p0, p2);
+      dct_interleave8(p1, p3);
+
+      // Each lane is one block; run the exact SSE2 store sequence per half.
+      #define dct_store(p, r0, r1) \
+         { \
+            __m128i lo = _mm256_castsi256_si128(p); \
+            __m128i hi = _mm256_extracti128_si256(p, 1); \
+            _mm_storel_epi64((__m128i *) (out0 + (r0)*out_stride), lo); \
+            _mm_storel_epi64((__m128i *) (out0 + (r1)*out_stride), _mm_shuffle_epi32(lo, 0x4e)); \
+            _mm_storel_epi64((__m128i *) (out1 + (r0)*out_stride), hi); \
+            _mm_storel_epi64((__m128i *) (out1 + (r1)*out_stride), _mm_shuffle_epi32(hi, 0x4e)); \
+         }
+      dct_store(p0, 0, 1);
+      dct_store(p2, 2, 3);
+      dct_store(p1, 4, 5);
+      dct_store(p3, 6, 7);
+      #undef dct_store
+   }
+
+   #undef dct_const
+   #undef dct_rot
+   #undef dct_widen
+   #undef dct_wadd
+   #undef dct_wsub
+   #undef dct_bfly32o
+   #undef dct_interleave8
+   #undef dct_interleave16
+   #undef dct_pass
+   #undef dct_loadrow
+}
+#endif // STBI_AVX2
+
 #ifdef STBI_NEON
 
 // NEON integer IDCT. should produce bit-identical
@@ -3012,7 +3194,7 @@ static int stbi__parse_entropy_coded_data(stbi__jpeg *z)
    if (!z->progressive) {
       if (z->scan_n == 1) {
          int i,j;
-         STBI_SIMD_ALIGN(short, data[64]);
+         STBI_SIMD_ALIGN(short, data[128]);
          int n = z->order[0];
          // non-interleaved data, we just need to process one block at a time,
          // in trivial scanline order
@@ -3024,6 +3206,37 @@ static int stbi__parse_entropy_coded_data(stbi__jpeg *z)
             for (i=0; i < w; ++i) {
                int ha = z->img_comp[n].ha;
                if (!stbi__jpeg_decode_block(z, data, z->huff_dc+z->img_comp[n].hd, z->huff_ac+ha, z->fast_ac[ha], n, z->dequant[z->img_comp[n].tq])) return 0;
+#ifdef STBI_AVX2
+               // Pair block i with block i+1 (IDCT is independent of entropy
+               // state, but the restart accounting between them must match).
+               if (z->idct_block_pair_kernel && i+1 < w) {
+                  stbi_uc *out = z->img_comp[n].data+z->img_comp[n].w2*j*8+i*8;
+                  int stride = z->img_comp[n].w2;
+                  // count down the restart interval after block i
+                  if (--z->todo <= 0) {
+                     if (z->code_bits < 24) stbi__grow_buffer_unsafe(z);
+                     if (!STBI__RESTART(z->marker)) {
+                        // bail: block i is already decoded, emit it alone
+                        z->idct_block_kernel(out, stride, data);
+                        return 1;
+                     }
+                     stbi__jpeg_reset(z);
+                  }
+                  if (!stbi__jpeg_decode_block(z, data+64, z->huff_dc+z->img_comp[n].hd, z->huff_ac+ha, z->fast_ac[ha], n, z->dequant[z->img_comp[n].tq])) return 0;
+                  // count down the restart interval after block i+1
+                  if (--z->todo <= 0) {
+                     if (z->code_bits < 24) stbi__grow_buffer_unsafe(z);
+                     if (!STBI__RESTART(z->marker)) {
+                        z->idct_block_pair_kernel(out, out+8, stride, data, data+64);
+                        return 1;
+                     }
+                     stbi__jpeg_reset(z);
+                  }
+                  z->idct_block_pair_kernel(out, out+8, stride, data, data+64);
+                  ++i;
+                  continue;
+               }
+#endif
                z->idct_block_kernel(z->img_comp[n].data+z->img_comp[n].w2*j*8+i*8, z->img_comp[n].w2, data);
                // every data block is an MCU, so countdown the restart interval
                if (--z->todo <= 0) {
@@ -3038,7 +3251,7 @@ static int stbi__parse_entropy_coded_data(stbi__jpeg *z)
          return 1;
       } else { // interleaved
          int i,j,k,x,y;
-         STBI_SIMD_ALIGN(short, data[64]);
+         STBI_SIMD_ALIGN(short, data[128]);
          for (j=0; j < z->img_mcu_y; ++j) {
             for (i=0; i < z->img_mcu_x; ++i) {
                // scan an interleaved mcu... process scan_n components in order
@@ -3051,6 +3264,18 @@ static int stbi__parse_entropy_coded_data(stbi__jpeg *z)
                         int x2 = (i*z->img_comp[n].h + x)*8;
                         int y2 = (j*z->img_comp[n].v + y)*8;
                         int ha = z->img_comp[n].ha;
+#ifdef STBI_AVX2
+                        // Pair horizontally adjacent blocks (x and x+1): their
+                        // outputs are 8 pixels apart in the same row.
+                        if (z->idct_block_pair_kernel && x+1 < z->img_comp[n].h) {
+                           stbi_uc *out = z->img_comp[n].data+z->img_comp[n].w2*y2+x2;
+                           if (!stbi__jpeg_decode_block(z, data, z->huff_dc+z->img_comp[n].hd, z->huff_ac+ha, z->fast_ac[ha], n, z->dequant[z->img_comp[n].tq])) return 0;
+                           if (!stbi__jpeg_decode_block(z, data+64, z->huff_dc+z->img_comp[n].hd, z->huff_ac+ha, z->fast_ac[ha], n, z->dequant[z->img_comp[n].tq])) return 0;
+                           z->idct_block_pair_kernel(out, out+8, z->img_comp[n].w2, data, data+64);
+                           ++x;
+                           continue;
+                        }
+#endif
                         if (!stbi__jpeg_decode_block(z, data, z->huff_dc+z->img_comp[n].hd, z->huff_ac+ha, z->fast_ac[ha], n, z->dequant[z->img_comp[n].tq])) return 0;
                         z->idct_block_kernel(z->img_comp[n].data+z->img_comp[n].w2*y2+x2, z->img_comp[n].w2, data);
                      }
@@ -3148,6 +3373,18 @@ static void stbi__jpeg_finish(stbi__jpeg *z)
          for (j=0; j < h; ++j) {
             for (i=0; i < w; ++i) {
                short *data = z->img_comp[n].coeff + 64 * (i + j * z->img_comp[n].coeff_w);
+#ifdef STBI_AVX2
+               // Coeff blocks are contiguous in the coeff buffer, and the
+               // outputs of adjacent blocks are 8 pixels apart in the row.
+               if (z->idct_block_pair_kernel && i+1 < w) {
+                  stbi_uc *out = z->img_comp[n].data+z->img_comp[n].w2*j*8+i*8;
+                  stbi__jpeg_dequantize(data, z->dequant[z->img_comp[n].tq]);
+                  stbi__jpeg_dequantize(data+64, z->dequant[z->img_comp[n].tq]);
+                  z->idct_block_pair_kernel(out, out+8, z->img_comp[n].w2, data, data+64);
+                  ++i;
+                  continue;
+               }
+#endif
                stbi__jpeg_dequantize(data, z->dequant[z->img_comp[n].tq]);
                z->idct_block_kernel(z->img_comp[n].data+z->img_comp[n].w2*j*8+i*8, z->img_comp[n].w2, data);
             }
@@ -3965,6 +4202,7 @@ void stbi__YCbCr_to_RGB_avx2(stbi_uc *out, stbi_uc const *y, stbi_uc const *pcb,
 static void stbi__setup_jpeg(stbi__jpeg *j)
 {
    j->idct_block_kernel = stbi__idct_block;
+   j->idct_block_pair_kernel = NULL;
    j->YCbCr_to_RGB_kernel = stbi__YCbCr_to_RGB_row;
    j->resample_row_hv_2_kernel = stbi__resample_row_hv_2;
 
@@ -3980,6 +4218,7 @@ static void stbi__setup_jpeg(stbi__jpeg *j)
 #ifdef STBI_AVX2
    if (stbi__avx2_available()) {
       j->YCbCr_to_RGB_kernel = stbi__YCbCr_to_RGB_avx2;
+      j->idct_block_pair_kernel = stbi__idct_block_avx2;
    }
 #endif
 
