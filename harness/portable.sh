@@ -9,7 +9,9 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 BUILD="$ROOT/build/portable"
 mkdir -p "$BUILD"
-CC=${CC:-clang}
+if [ -z "${CC:-}" ]; then
+    CC=$(command -v clang 2>/dev/null || command -v gcc 2>/dev/null || echo cc)
+fi
 ZIG_CC=${ZIG_CC:-"zig cc"}
 
 # Native configs: <name>|<flags>

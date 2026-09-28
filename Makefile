@@ -4,9 +4,10 @@
 # The oracle is ALWAYS the pristine upstream header; only src/ is modified.
 
 ROOT := $(CURDIR)
-# Use the hermetic clang by default; override with `make CC=gcc`.
+# Prefer the hermetic clang, else any available compiler; override with
+# `make CC=gcc`.
 ifeq ($(origin CC),default)
-CC := clang
+CC := $(shell command -v clang 2>/dev/null || command -v gcc 2>/dev/null || echo cc)
 endif
 export CC
 
