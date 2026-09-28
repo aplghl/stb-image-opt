@@ -129,9 +129,16 @@ held-out +6.3%, so PGO generalization is real but modest.
   resisted the SIMD approaches tried. A table-driven multi-bit Huffman decode
   is the most promising next step.
 - **JPEG IDCT**: taken (see `stbi__idct_block_avx2`). Coverage is full for
-  non-interleaved, progressive, 4:2:0 and 4:2:2 baseline. The remaining gap is
-  **4:4:4/4:4:0 baseline luma** (one of three blocks unpaired in 4:4:4; luma
-  unpaired in 4:4:0), which vertical pairing (`h==1, v>=2`) would close.
+  non-interleaved, progressive, 4:2:0 and 4:2:2 baseline, and 2 of 3 blocks per
+  MCU in 4:4:4. The residual is the unpaired **last component (Cr) in 4:4:4**
+  and the two **luma** blocks in 4:4:0 (Y is `h==1, v==2`) — not "4:4:4 luma".
+  Vertical pairing (`h==1, v>=2`) would close only 4:4:0, which the corpus does
+  not contain (`gen_corpus.py` emits subsampling 0/1/2 only); 4:4:4 needs
+  pairing across MCUs. **Not taken**: either approach needs a stateful
+  pending-pair slot (the pair kernel takes two arbitrary output pointers plus
+  one stride, so any two same-stride blocks can be paired) or cross-MCU
+  buffering, for an estimated **+2–3% on 4:4:4 baseline only**, at the cost of
+  added state in the hot interleaved loop. Recorded here for a future pass.
 - **`stbi__resample_row_hv_2_simd`** (~15% of JPEG): AVX2 needs cross-128-bit-lane
   shifts for the horizontal phase, doable but fiddly.
 - **BOLT** (`llvm-bolt`) was not applied; it needs a profile and gives single
