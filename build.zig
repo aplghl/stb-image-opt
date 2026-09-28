@@ -28,7 +28,9 @@ pub fn build(b: *std.Build) void {
     });
     dd_mod.addIncludePath(b.path("src"));
     dd_mod.addCSourceFile(.{ .file = b.path("tools/decode_dump.c"), .flags = &.{} });
-    dd_mod.linkSystemLibrary("m", .{});
+    // libm is separate only on glibc/musl Linux; macOS folds it into libSystem
+    // and Windows into the CRT, where linking -lm would fail.
+    if (target.result.os.tag == .linux) dd_mod.linkSystemLibrary("m", .{});
     const dd = b.addExecutable(.{
         .name = "decode_dump",
         .root_module = dd_mod,
