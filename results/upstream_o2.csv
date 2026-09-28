@@ -1,0 +1,15 @@
+file,bytes,w,h,comp,req,iters,ns_per_decode,ns_per_pixel,cycles_per_pixel,Mpixel_per_s
+corpus/grad_640_480_q85_p0_s2.jpg,13446,640,480,3,0,140,725870.9,2.3629,5.060,423.22
+corpus/plasma_512_q85_p0_s2.jpg,48246,512,512,3,0,89,998266.4,3.8081,8.155,262.60
+corpus/plasma_512_q85_p1_s0.jpg,67287,512,512,3,0,31,3254185.6,12.4137,26.584,80.56
+corpus/plasma_512_q10_p0_s2.jpg,12353,512,512,3,0,141,712057.2,2.7163,5.817,368.15
+corpus/plasma_512.png,347337,512,512,3,0,32,3099673.2,11.8243,25.322,84.57
+corpus/plasma_512_pal.png,114958,512,512,3,0,116,884948.6,3.3758,7.229,296.23
+corpus/plasma_512.psd,786472,512,512,4,0,268,385743.2,1.4715,3.151,679.58
+corpus/anim.gif,31934,128,96,4,0,1555,63878.3,5.1984,11.132,192.37
+corpus/hdr_range.hdr,158274,256,192,3,0,61,1634137.7,33.2466,69.838,30.08
+upstream/tests/pngsuite/16bit/basn0g16.png,167,32,32,1,0,55493,1872.4,1.8285,3.841,546.89
+upstream/tests/pngsuite/16bit/basn6a16.png,3435,32,32,4,0,4258,22007.3,21.4915,45.145,46.53
+upstream/tests/pngsuite/16bit/basi6a16.png,4180,32,32,4,0,4337,24815.7,24.2341,50.905,41.26
+upstream/tests/pngsuite/primary/basn3p08.png,1286,32,32,3,0,22810,4409.7,4.3063,9.045,232.22
+upstream/tests/pngsuite/primary/basn0g01.png,164,32,32,1,0,55126,1823.4,1.7806,3.740,561.60

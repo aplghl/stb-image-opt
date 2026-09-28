@@ -1,0 +1,4 @@
+kernel,n,iters,ns_per_pixel
+ycbcr_scalar,4096,50000,0.27039
+ycbcr_sse2,4096,50000,0.20771
+ycbcr_avx2,4096,50000,0.12716
