@@ -34,7 +34,7 @@ source change is guarded and bit-exact.
 
 ## What changed in `src/stb_image.h`
 
-+517/−11 lines, additive and guarded; public API/ABI unchanged.
++539/−10 lines, additive and guarded; public API/ABI unchanged.
 
 1. **AVX2 runtime dispatch infrastructure.** `STBI_AVX2`,
    `STBI_TARGET_AVX2` (`__attribute__((target("avx2")))`), and
@@ -61,6 +61,14 @@ source change is guarded and bit-exact.
    Falling back to the SSE2 kernel for leftovers, odd counts and non-AVX2 CPUs.
    The non-interleaved restart/bail path emits the pending block singly so
    corrupt-input behavior is unchanged.
+4. **PNG decode** (bit-exact, no SIMD needed):
+   - `stbi__create_png_image_raw` filters 8-bit rows **directly into the output**
+     when `img_n==out_n` (the common `req_comp=0` case), dropping the two-row
+     scratch buffer and the extra `memcpy` pass per row.
+   - `stbi__parse_huffman_block` uses a **chunked LZ77 copy**: `memset` for
+     `dist==1`, `memcpy` when `dist>=len`, and period-`dist` chunks when the
+     match overlaps (`dist>=8`); the byte loop remains for `dist<8`. Decoded
+     bytes and all error/EOF semantics are unchanged.
 
 The header stays a single self-contained file; no new runtime dependency.
 
@@ -69,10 +77,17 @@ The header stays a single self-contained file; no new runtime dependency.
 Held-out PGO (train on every corpus image except the measured 14), candidate
 flags `-O3 -march=x86-64-v2 -ffp-contract=off`.
 
-Mixed suite (14 files, `results/summary.csv`): **≈ +6% geomean** vs upstream
-`-O2` (latest run +5.8%; the suite is PNG-heavy and run-to-run load shifts the
-baseline). Highlights: GIF **+20%**, progressive JPEG **+14%**, 4:2:0 baseline
-JPEG +9–13%, palette PNG +5%.
+Mixed suite (14 files, `results/summary.csv`): **≈ +10% geomean** vs upstream
+`-O2` (latest run +10.1%; the suite is PNG-heavy and run-to-run load shifts the
+baseline). Highlights: palette PNG **+29%**, GIF **+21%**, progressive JPEG
+**+19%**, 4:2:0 baseline JPEG +13–15%, 16-bit RGBA PNG +9%, 8-bit RGB PNG +8%.
+
+PNG decode, controlled A/B vs the pre-change build (`req_comp=0`, same
+compiler/flags): **+8.6% geomean** across the seven measured PNGs (palette +16%,
+1-bit grayscale +12%, 16-bit grayscale +21%, 8-bit RGB +5%). On
+`plasma_512.png` the IDAT/filter work drops from 51.6M to 45.3M instructions
+(−12%): `stbi__create_png_image_raw` −20% (45.8%→41.6% of total) and
+`stbi__do_zlib` −22% (20.4%→18.0%).
 
 JPEG → RGBA (`req_comp=4`, where the AVX2 YCbCr kernel is active):
 **≈ +13%** geomean.
@@ -106,6 +121,10 @@ held-out +6.3%, so PGO generalization is real but modest.
 
 ## Rejected experiments (measured)
 
+- **Widening the zlib fast Huffman table** (`STBI__ZFAST_BITS` 9→10) was
+  measured **slower** (PNG geomean 0.925×): `stbi__zbuild_huffman` rebuilds and
+  memsets the larger table per dynamic block, which outweighs the reduction in
+  `stbi__zhuffman_decode_slowpath` calls. Reverted.
 - **AVX2 PNG row unfiltering** (Sub/Up/Avg/Paeth, pixel-at-a-time 16-bit lanes,
   bit-exact). Measured **slower** for most PNGs (0.44×–0.99×): the scalar
   filter loops are already auto-vectorized by the compiler, and the loop-carried
@@ -124,10 +143,15 @@ held-out +6.3%, so PGO generalization is real but modest.
 
 ## Remaining headroom (not taken)
 
-- **PNG inflate** (`stbi__zhuffman_decode`, ~32% of PNG instructions) and
-  **PNG filtering** (~46%) dominate PNG; both are serial/dependency-bound and
-  resisted the SIMD approaches tried. A table-driven multi-bit Huffman decode
-  is the most promising next step.
+- **PNG inflate**: `stbi__zhuffman_decode` is still the largest single PNG
+  block (~37% of instructions on `plasma_512.png` at `req_comp=0` after the LZ77
+  improvements). Its bit-serial per-symbol cost resists easy wins — widening the
+  fast table regressed (see below); a bounded two-level / multi-symbol Huffman
+  table is the remaining idea.
+- **PNG Paeth filtering**: the `stbi__paeth` row loop is ~21% of PNG
+  instructions and is latency-bound by the `cur[k-filter_bytes]` dependency.
+  The earlier pixel-at-a-time AVX2 attempt was slower; a libpng-style
+  parallel-prefix/speculative approach is the untried option.
 - **JPEG IDCT**: taken (see `stbi__idct_block_avx2`). Coverage is full for
   non-interleaved, progressive, 4:2:0 and 4:2:2 baseline, and 2 of 3 blocks per
   MCU in 4:4:4. The residual is the unpaired **last component (Cr) in 4:4:4**

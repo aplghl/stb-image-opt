@@ -6,9 +6,10 @@
 
 A performance fork of [stb_image](https://github.com/nothings/stb) (`stb_image.h`
 v2.30) with **runtime-dispatched AVX2** fast paths (JPEG IDCT and YCbCr→RGB), a
-reproducible PGO build recipe, and a bit-exact differential harness. Optimize
-once, and every consumer of the header or the prebuilt library benefits — with
-**no source or build changes** and **identical decoded output**.
+bit-exact PNG decode speedup, a reproducible PGO build recipe, and a bit-exact
+differential harness. Optimize once, and every consumer of the header or the
+prebuilt library benefits — with **no source or build changes** and **identical
+decoded output**.
 
 - **Upstream base:** `nothings/stb` @ `2c980bb` (`stb_image.h` v2.30), vendored
   in `upstream/` as the pristine oracle.
@@ -20,7 +21,7 @@ once, and every consumer of the header or the prebuilt library benefits — with
   and Windows are attached to [releases](https://github.com/aplghl/stb-image-opt/releases)
   — see [Prebuilt releases](#prebuilt-releases).
 
-Only **`src/stb_image.h`** is modified: +517/−11 lines, all additive and guarded.
+Only **`src/stb_image.h`** is modified: +539/−10 lines, all additive and guarded.
 The public API, structs, ABI and default behavior are unchanged.
 
 ## Results
@@ -32,10 +33,12 @@ WSL2. Reproduce with `make bench-vs-upstream`.
 
 | workload | speedup vs upstream `-O2` |
 | --- | --- |
-| Mixed suite (`results/summary.csv`) | **≈ +6%** geomean |
+| Mixed suite (`results/summary.csv`) | **≈ +10%** geomean |
+| PNG decode (isolated A/B, `req_comp=0`) | **+8.6%** geomean |
+| palette PNG | **+29%** |
+| GIF decode | **+21%** |
+| progressive JPEG | **+19%** |
 | JPEG → RGBA (`req_comp=4`) | **≈ +13%** geomean |
-| GIF decode | **+20%** |
-| progressive JPEG | **+14%** |
 | AVX2 YCbCr kernel vs SSE2 (isolated) | **1.63×** |
 | AVX2 IDCT pair kernel vs SSE2 (isolated) | **1.70×** |
 
@@ -44,6 +47,11 @@ The IDCT pair kernel adds **≈ +8%** on `req_comp=0` and **≈ +14%** on
 compiler/flags), on top of the PGO and YCbCr gains. It is the largest JPEG
 compute step and, unlike the YCbCr kernel, accelerates every output channel
 count.
+
+PNG decoding adds **+8.6%** (isolated A/B, `req_comp=0`): 8-bit rows are
+filtered directly into the output (no scratch buffer + copy), and the zlib LZ77
+copy is chunked instead of byte-at-a-time. Both are bit-exact and independent
+of SIMD.
 
 The exact build is **bit-identical** to upstream on the whole corpus
 (`upstream/tests/pngsuite` + generated corpus: ~12,300 checks across
@@ -126,7 +134,7 @@ Not shipped — build from source instead: **macOS**
 
 ## What changed
 
-Two runtime-dispatched AVX2 kernels, plus the dispatch plumbing:
+Two runtime-dispatched AVX2 kernels, plus a bit-exact PNG decode speedup:
 
 1. `stbi__YCbCr_to_RGB_avx2` — a 16-pixel-wide AVX2 YCbCr→RGB kernel (used for
    4-channel output, the same case the existing SSE2 path accelerates). Each
@@ -143,6 +151,12 @@ Two runtime-dispatched AVX2 kernels, plus the dispatch plumbing:
    interleaved loop, and consecutive single-block components (Cb+Cr in
    4:2:0/4:2:2, luma+chroma in 4:4:4), falling back to the SSE2 kernel for
    leftovers.
+
+3. **PNG decode** — two bit-exact, no-SIMD improvements:
+   `stbi__create_png_image_raw` filters 8-bit rows directly into the output when
+   `img_n==out_n` (dropping the scratch row buffer and the copy), and the zlib
+   LZ77 copy in `stbi__parse_huffman_block` is chunked (`memset` for `dist==1`,
+   wide copies otherwise) instead of byte-at-a-time.
 
 Dispatch is added cleanly on top of stb's existing model:
 

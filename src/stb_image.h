@@ -4762,7 +4762,14 @@ static int stbi__parse_huffman_block(stbi__zbuf *a)
          p = (stbi_uc *) (zout - dist);
          if (dist == 1) { // run of one byte; common in images.
             stbi_uc v = *p;
-            if (len) { do *zout++ = v; while (--len); }
+            if (len) { memset(zout, v, len); zout += len; }
+         } else if (dist >= len) { // non-overlapping match: copy straight through
+            memcpy(zout, p, len);
+            zout += len;
+         } else if (dist >= 8) { // overlapping: periodic with period `dist`
+            int rem = len;
+            while (rem >= dist) { memcpy(zout, zout-dist, dist); zout += dist; rem -= dist; }
+            if (rem) { memcpy(zout, zout-dist, rem); zout += rem; }
          } else {
             if (len) { do *zout++ = *p++; while (--len); }
          }
@@ -5208,6 +5215,9 @@ static int stbi__create_png_image_raw(stbi__png *a, stbi_uc *raw, stbi__uint32 r
    int output_bytes = out_n*bytes;
    int filter_bytes = img_n*bytes;
    int width = x;
+   // For 8-bit data with no alpha expansion the filtered row is exactly the
+   // output row, so filter straight into it and skip the scratch row + copy.
+   int direct = (depth == 8 && img_n == out_n);
 
    STBI_ASSERT(out_n == s->img_n || out_n == s->img_n+1);
    a->out = (stbi_uc *) stbi__malloc_mad3(x, y, output_bytes, 0); // extra bytes to write off the end into
@@ -5225,9 +5235,13 @@ static int stbi__create_png_image_raw(stbi__png *a, stbi_uc *raw, stbi__uint32 r
    // so just check for raw_len < img_len always.
    if (raw_len < img_len) return stbi__err("not enough pixels","Corrupt PNG");
 
-   // Allocate two scan lines worth of filter workspace buffer.
-   filter_buf = (stbi_uc *) stbi__malloc_mad2(img_width_bytes, 2, 0);
-   if (!filter_buf) return stbi__err("outofmem", "Out of memory");
+   // Allocate two scan lines worth of filter workspace buffer (not needed when
+   // filtering directly into the output).
+   filter_buf = NULL;
+   if (!direct) {
+      filter_buf = (stbi_uc *) stbi__malloc_mad2(img_width_bytes, 2, 0);
+      if (!filter_buf) return stbi__err("outofmem", "Out of memory");
+   }
 
    // Filtering for low-bit-depth images
    if (depth < 8) {
@@ -5236,12 +5250,19 @@ static int stbi__create_png_image_raw(stbi__png *a, stbi_uc *raw, stbi__uint32 r
    }
 
    for (j=0; j < y; ++j) {
-      // cur/prior filter buffers alternate
-      stbi_uc *cur = filter_buf + (j & 1)*img_width_bytes;
-      stbi_uc *prior = filter_buf + (~j & 1)*img_width_bytes;
       stbi_uc *dest = a->out + stride*j;
+      stbi_uc *cur, *prior;
       int nk = width * filter_bytes;
       int filter = *raw++;
+      if (direct) {
+         // filter in place; prior is the previous output row (unused on row 0)
+         cur = dest;
+         prior = (j == 0) ? dest : dest - stride;
+      } else {
+         // cur/prior filter buffers alternate
+         cur = filter_buf + (j & 1)*img_width_bytes;
+         prior = filter_buf + (~j & 1)*img_width_bytes;
+      }
 
       // check filter type
       if (filter > 4) {
@@ -5293,7 +5314,9 @@ static int stbi__create_png_image_raw(stbi__png *a, stbi_uc *raw, stbi__uint32 r
       raw += nk;
 
       // expand decoded bits in cur to dest, also adding an extra alpha channel if desired
-      if (depth < 8) {
+      if (direct) {
+         // already filtered directly into dest above
+      } else if (depth < 8) {
          stbi_uc scale = (color == 0) ? stbi__depth_scale_table[depth] : 1; // scale grayscale values to 0..255 range
          stbi_uc *in = cur;
          stbi_uc *out = dest;

@@ -4,6 +4,20 @@ All notable changes to this fork are recorded here. This project tracks
 [stb_image](https://github.com/nothings/stb) by version; the format follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+
+- Bit-exact **PNG decode** speedups (isolated A/B **+8.6%** geomean across the
+  PNG corpus at `req_comp=0`; mixed-suite geomean rises from ≈ +6% to **≈ +10%**
+  vs upstream `-O2`):
+  - `stbi__create_png_image_raw` filters 8-bit rows **directly into the output**
+    when `img_n==out_n`, dropping the scratch row buffer and the per-row copy.
+  - `stbi__parse_huffman_block` uses a **chunked LZ77 copy**: `memset` for
+    `dist==1`, wide copies for non-overlapping and periodic (`dist>=8`) matches,
+    keeping the byte loop only for `dist<8`.
+  Decoded bytes and all error/EOF semantics are unchanged.
+
 ## [1.2.0] - 2026-09-28
 
 ### Changed
