@@ -1,6 +1,7 @@
 # stb-image-opt
 
 [![CI](https://github.com/aplghl/stb-image-opt/actions/workflows/ci.yml/badge.svg)](https://github.com/aplghl/stb-image-opt/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/aplghl/stb-image-opt)](https://github.com/aplghl/stb-image-opt/releases/latest)
 [![License: MIT OR Unlicense](https://img.shields.io/badge/license-MIT%20OR%20Unlicense-blue.svg)](#license)
 
 A performance fork of [stb_image](https://github.com/nothings/stb) (`stb_image.h`
@@ -15,6 +16,9 @@ changes** and **identical decoded output**.
 - **Scope:** `stb_image.h` only (the read/decoding side).
 - **Status:** exact build is bit-identical to upstream; the AVX2 path is selected
   at runtime and falls back to SSE2/scalar on older CPUs.
+- **Downloads:** prebuilt static libraries for Linux (glibc/musl), Linux ARM64
+  and Windows are attached to [releases](https://github.com/aplghl/stb-image-opt/releases)
+  — see [Prebuilt releases](#prebuilt-releases).
 
 Only **`src/stb_image.h`** is modified: +243/−1 lines, all additive and guarded.
 The public API, structs, ABI and default behavior are unchanged.
@@ -83,8 +87,35 @@ Then link `build/lib_exact/libstb_image_opt.a` (or
 /* ... stbi_load(...), stbi_image_free(...) ... */
 ```
 
-Release tarballs for `x86_64-linux-{gnu,musl}`, `aarch64-linux-musl` and
-`x86_64-windows-gnu` are attached to tagged GitHub releases.
+#### Prebuilt releases
+
+Tagged releases attach ready-to-link tarballs (built with
+`zig build -Doptimize=ReleaseFast`; the AVX2 path is runtime-dispatched, so one
+x86-64 binary runs on AVX2 and non-AVX2 CPUs alike):
+
+| Asset | Platform | ABI / notes |
+| --- | --- | --- |
+| `stb-image-opt-x86_64-linux-gnu.tar.gz` | Linux x86-64 | glibc — link with `-lm` |
+| `stb-image-opt-x86_64-linux-musl.tar.gz` | Linux x86-64 | musl, static |
+| `stb-image-opt-aarch64-linux-musl.tar.gz` | Linux ARM64 | musl, static |
+| `stb-image-opt-x86_64-windows-gnu.tar.gz` | Windows x86-64 | MinGW — library is `stb-image-opt.lib` |
+
+Each tarball extracts to `<triple>/` and contains:
+
+- `stb_image.h` — identical to `src/stb_image.h` in every tarball.
+- the static library (`libstb-image-opt.a`, or `stb-image-opt.lib` on Windows),
+  exporting the original `stbi_*` symbols.
+
+Include the header **without** `STB_IMAGE_IMPLEMENTATION`, link the library (and
+`-lm` on glibc Linux), and call the normal API:
+
+```sh
+cc app.c -I x86_64-linux-gnu x86_64-linux-gnu/libstb-image-opt.a -lm
+```
+
+Not shipped — build from source instead: **macOS**
+(`zig build -Dtarget=aarch64-macos`) and the **PGO/exact** variants
+(`scripts/build_opt.sh`, `PGO=1 scripts/build_opt.sh`).
 
 ## What changed
 
