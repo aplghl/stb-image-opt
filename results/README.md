@@ -17,6 +17,6 @@ machine-specific.
 Columns for `up*`/`fork*`: `file,bytes,w,h,comp,req,iters,ns_per_decode,`
 `ns_per_pixel,cycles_per_pixel,Mpixel_per_s`.
 
-Key numbers: mixed-suite geomean **≈ +5%** (`summary.csv`); JPEG→RGBA geomean
-**≈ +13%** (`up4` vs `fork4`); AVX2 YCbCr **1.59×** SSE2 and AVX2 IDCT
-**1.81×** SSE2 per block (`kernels.csv`).
+Key numbers: mixed-suite geomean **≈ +6%** (`summary.csv`); JPEG→RGBA geomean
+**≈ +13%** (`up4` vs `fork4`); AVX2 YCbCr **1.63×** SSE2 and AVX2 IDCT
+**1.70×** SSE2 per block (`kernels.csv`).

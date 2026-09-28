@@ -4,6 +4,16 @@ All notable changes to this fork are recorded here. This project tracks
 [stb_image](https://github.com/nothings/stb) by version; the format follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Changed
+
+- AVX2 IDCT coverage extended to the baseline interleaved path's chroma: Cb and
+  Cr (4:2:0/4:2:2) and luma+chroma (4:4:4) are now run through
+  `stbi__idct_block_avx2` together. Bit-exact; adds **+3.2%** (`req_comp=0`) /
+  **+5.1%** (`req_comp=4`) JPEG geomean over v1.1.0, and brings the IDCT's total
+  standalone contribution to **+7.7%** / **+13.7%** respectively.
+
 ## [1.1.0] - 2026-09-28
 
 ### Added

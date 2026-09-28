@@ -3257,6 +3257,29 @@ static int stbi__parse_entropy_coded_data(stbi__jpeg *z)
                // scan an interleaved mcu... process scan_n components in order
                for (k=0; k < z->scan_n; ++k) {
                   int n = z->order[k];
+#ifdef STBI_AVX2
+                  // Pair two consecutive single-block components (Cb+Cr in
+                  // 4:2:0/4:2:2, luma+chroma in 4:4:4): each is one block per
+                  // MCU with the same stride, but in a different plane, so the
+                  // pair kernel is handed both output pointers. The components
+                  // are still decoded in scan order, so the entropy stream is
+                  // consumed exactly as before.
+                  if (z->idct_block_pair_kernel && z->img_comp[n].h == 1 && z->img_comp[n].v == 1 && k+1 < z->scan_n) {
+                     int n2 = z->order[k+1];
+                     if (z->img_comp[n2].h == 1 && z->img_comp[n2].v == 1) {
+                        int stride = z->img_comp[n].w2;
+                        stbi_uc *out0 = z->img_comp[n].data+stride*(j*8)+i*8;
+                        stbi_uc *out1 = z->img_comp[n2].data+stride*(j*8)+i*8;
+                        int ha = z->img_comp[n].ha;
+                        int ha2 = z->img_comp[n2].ha;
+                        if (!stbi__jpeg_decode_block(z, data, z->huff_dc+z->img_comp[n].hd, z->huff_ac+ha, z->fast_ac[ha], n, z->dequant[z->img_comp[n].tq])) return 0;
+                        if (!stbi__jpeg_decode_block(z, data+64, z->huff_dc+z->img_comp[n2].hd, z->huff_ac+ha2, z->fast_ac[ha2], n2, z->dequant[z->img_comp[n2].tq])) return 0;
+                        z->idct_block_pair_kernel(out0, out1, stride, data, data+64);
+                        ++k;
+                        continue;
+                     }
+                  }
+#endif
                   // scan out an mcu's worth of this component; that's just determined
                   // by the basic H and V specified for the component
                   for (y=0; y < z->img_comp[n].v; ++y) {

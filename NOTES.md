@@ -34,7 +34,7 @@ source change is guarded and bit-exact.
 
 ## What changed in `src/stb_image.h`
 
-+485/−2 lines, additive and guarded; public API/ABI unchanged.
++517/−11 lines, additive and guarded; public API/ABI unchanged.
 
 1. **AVX2 runtime dispatch infrastructure.** `STBI_AVX2`,
    `STBI_TARGET_AVX2` (`__attribute__((target("avx2")))`), and
@@ -49,13 +49,18 @@ source change is guarded and bit-exact.
 3. **`stbi__idct_block_avx2`** — the JPEG IDCT, two 8×8 blocks at a time (block
    A in the low 128-bit lane, block B in the high lane). A direct widening of
    `stbi__idct_simd`: every op it uses is in-lane on AVX2, so each half runs the
-   exact SSE2 recipe. Bit-identical, **1.81×** SSE2 per block in isolation
-   (`results/kernels.csv`, `make idct-check`). The three IDCT call sites pair
-   adjacent blocks — baseline non-interleaved (`i`,`i+1`), baseline interleaved
-   (`x`,`x+1` when `h>=2`, i.e. 4:2:0/4:2:2 luma) and progressive `finish`
-   (`i`,`i+1`, all components) — and fall back to the SSE2 kernel for leftovers,
-   odd counts and non-AVX2 CPUs. The non-interleaved restart/bail path emits the
-   pending block singly so corrupt-input behavior is unchanged.
+   exact SSE2 recipe. Bit-identical, **1.70×** SSE2 per block in isolation
+   (`results/kernels.csv`, `make idct-check`). The IDCT call sites pair:
+   - baseline non-interleaved (`i`,`i+1`) and progressive `finish` (`i`,`i+1`,
+     all components);
+   - baseline interleaved luma (`x`,`x+1` when `h>=2`, i.e. 4:2:0/4:2:2);
+   - baseline interleaved consecutive single-block components (Cb+Cr in
+     4:2:0/4:2:2, luma+chroma in 4:4:4), which live in different planes but
+     share a stride, so the pair kernel is handed both output pointers.
+
+   Falling back to the SSE2 kernel for leftovers, odd counts and non-AVX2 CPUs.
+   The non-interleaved restart/bail path emits the pending block singly so
+   corrupt-input behavior is unchanged.
 
 The header stays a single self-contained file; no new runtime dependency.
 
@@ -64,23 +69,25 @@ The header stays a single self-contained file; no new runtime dependency.
 Held-out PGO (train on every corpus image except the measured 14), candidate
 flags `-O3 -march=x86-64-v2 -ffp-contract=off`.
 
-Mixed suite (14 files, `results/summary.csv`): **≈ +5% geomean** vs upstream
-`-O2` (three repeat runs gave +3.3%, +4.9%, +5.6%; the suite is PNG-heavy and
-run-to-run load shifts the baseline). Highlights: GIF **+20%**, progressive JPEG
-**+14%**, 8-bit palette PNG +5–10%, 16-bit RGBA PNG +5%.
+Mixed suite (14 files, `results/summary.csv`): **≈ +6% geomean** vs upstream
+`-O2` (latest run +5.8%; the suite is PNG-heavy and run-to-run load shifts the
+baseline). Highlights: GIF **+20%**, progressive JPEG **+14%**, 4:2:0 baseline
+JPEG +9–13%, palette PNG +5%.
 
-JPEG → RGBA (`req_comp=4`, where the AVX2 YCbCr kernel is active): **≈ +13%**
-geomean. The AVX2 IDCT adds **≈ +8%** on top of that (controlled A/B, same
-compiler/flags).
+JPEG → RGBA (`req_comp=4`, where the AVX2 YCbCr kernel is active):
+**≈ +13%** geomean.
 
-IDCT, isolated by forcing AVX2 vs SSE2 in the same build (`req_comp=0`, so the
-YCbCr kernel is inactive): JPEG geomean **+4.2%** end-to-end; the kernel itself
-is **1.81×** SSE2 per block. This is the IDCT's standalone contribution and does
-not depend on PGO.
+IDCT standalone contribution, measured by controlled A/B against the pre-IDCT
+build (same compiler/flags, no PGO):
+- `req_comp=0` JPEG geomean **+7.7%**;
+- `req_comp=4` JPEG geomean **+13.7%**.
 
-Kernel isolation (`make kernels`): YCbCr AVX2 = 0.119 ns/px vs SSE2 0.190
-(**1.59×**); IDCT AVX2 pair = 0.159 ns/px vs SSE2 0.288 (**1.81×**) vs scalar
-1.072 (**6.74×**).
+The kernel itself is **1.70×** SSE2 per block (`make kernels`), which does not
+depend on PGO.
+
+Kernel isolation (`make kernels`): YCbCr AVX2 = 0.132 ns/px vs SSE2 0.214
+(**1.63×**); IDCT AVX2 pair = 0.162 ns/px vs SSE2 0.275 (**1.70×**) vs scalar
+1.027 (**6.35×**).
 
 Variance: repeated runs of the same build vary by a few percent per file; treat
 individual ratios under ~3% as noise. The in-sample PGO gain was ~+7% vs the
@@ -121,11 +128,10 @@ held-out +6.3%, so PGO generalization is real but modest.
   **PNG filtering** (~46%) dominate PNG; both are serial/dependency-bound and
   resisted the SIMD approaches tried. A table-driven multi-bit Huffman decode
   is the most promising next step.
-- **JPEG IDCT**: taken (see `stbi__idct_block_avx2`). The pair kernel covers
-  non-interleaved/progressive blocks fully and 4:2:0/4:2:2 luma in the baseline
-  interleaved path; **interleaved chroma** and **4:4:4 baseline** still use SSE2
-  and are the next coverage step (pair Cb+Cr within an MCU, or a pending-pair
-  buffer).
+- **JPEG IDCT**: taken (see `stbi__idct_block_avx2`). Coverage is full for
+  non-interleaved, progressive, 4:2:0 and 4:2:2 baseline. The remaining gap is
+  **4:4:4/4:4:0 baseline luma** (one of three blocks unpaired in 4:4:4; luma
+  unpaired in 4:4:0), which vertical pairing (`h==1, v>=2`) would close.
 - **`stbi__resample_row_hv_2_simd`** (~15% of JPEG): AVX2 needs cross-128-bit-lane
   shifts for the horizontal phase, doable but fiddly.
 - **BOLT** (`llvm-bolt`) was not applied; it needs a profile and gives single

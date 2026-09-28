@@ -20,7 +20,7 @@ once, and every consumer of the header or the prebuilt library benefits — with
   and Windows are attached to [releases](https://github.com/aplghl/stb-image-opt/releases)
   — see [Prebuilt releases](#prebuilt-releases).
 
-Only **`src/stb_image.h`** is modified: +485/−2 lines, all additive and guarded.
+Only **`src/stb_image.h`** is modified: +517/−11 lines, all additive and guarded.
 The public API, structs, ABI and default behavior are unchanged.
 
 ## Results
@@ -32,17 +32,18 @@ WSL2. Reproduce with `make bench-vs-upstream`.
 
 | workload | speedup vs upstream `-O2` |
 | --- | --- |
-| Mixed suite (`results/summary.csv`) | **≈ +5%** geomean |
+| Mixed suite (`results/summary.csv`) | **≈ +6%** geomean |
 | JPEG → RGBA (`req_comp=4`) | **≈ +13%** geomean |
 | GIF decode | **+20%** |
 | progressive JPEG | **+14%** |
 | AVX2 YCbCr kernel vs SSE2 (isolated) | **1.63×** |
-| AVX2 IDCT pair kernel vs SSE2 (isolated) | **1.81×** |
+| AVX2 IDCT pair kernel vs SSE2 (isolated) | **1.70×** |
 
-The IDCT pair kernel adds **≈ +4–8%** on JPEG decoding (`req_comp` 0–4,
-measured by dispatching AVX2 vs SSE2 on the same build), on top of the PGO and
-YCbCr gains. It is the largest JPEG compute step and, unlike the YCbCr kernel,
-accelerates every output channel count.
+The IDCT pair kernel adds **≈ +8%** on `req_comp=0` and **≈ +14%** on
+`req_comp=4` JPEG decoding (controlled A/B vs the pre-IDCT build, same
+compiler/flags), on top of the PGO and YCbCr gains. It is the largest JPEG
+compute step and, unlike the YCbCr kernel, accelerates every output channel
+count.
 
 The exact build is **bit-identical** to upstream on the whole corpus
 (`upstream/tests/pngsuite` + generated corpus: ~12,300 checks across
@@ -137,8 +138,11 @@ Two runtime-dispatched AVX2 kernels, plus the dispatch plumbing:
    (one per 128-bit lane). It is a direct widening of `stbi__idct_simd`: every
    operation it uses (`madd`, `unpacklo/hi`, `packs`, `packus`, `srai`) is
    in-lane on AVX2, so each half runs the exact SSE2 recipe and is byte-for-byte
-   identical. Callers pair adjacent blocks in the baseline, non-interleaved and
-   progressive IDCT loops and fall back to the SSE2 kernel for leftovers.
+   identical. Callers pair adjacent blocks in the baseline non-interleaved and
+   progressive `finish` loops, horizontally adjacent luma blocks in the baseline
+   interleaved loop, and consecutive single-block components (Cb+Cr in
+   4:2:0/4:2:2, luma+chroma in 4:4:4), falling back to the SSE2 kernel for
+   leftovers.
 
 Dispatch is added cleanly on top of stb's existing model:
 
