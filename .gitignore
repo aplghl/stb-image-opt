@@ -1,0 +1,14 @@
+# build artifacts
+/build/
+/zig-out/
+/.zig-cache/
+gmon.out
+*.profraw
+*.o
+*.a
+fuzz-*.log
+crash-*
+
+# python
+__pycache__/
+*.pyc

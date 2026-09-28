@@ -1,0 +1,18 @@
+# Normalize text to LF; never let git touch image bytes.
+* text=auto eol=lf
+
+# Corpus and fixture images are binary.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.bmp  binary
+*.tga  binary
+*.psd  binary
+*.pic  binary
+*.pnm  binary
+*.ppm  binary
+*.pgm  binary
+*.hdr  binary
+*.sbm  binary
+*.pcm  binary
