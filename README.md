@@ -208,8 +208,8 @@ source scripts/env.sh
 src/stb_image.h      optimized header (the fork)
 upstream/            pristine nothings/stb (oracle, never edited)
 lib/stb_image.c      TU for the prebuilt static library
-tools/               decode_dump (differential), gen_hdr, stbi_fuzz (libFuzzer)
-harness/             diff, dispatch, portable, sanitize, fuzz, bench*, kernbench
+tools/               decode_dump (differential), idct_check, gen_hdr, stbi_fuzz (libFuzzer)
+harness/             diff, dispatch, portable, idct_check, sanitize, fuzz, bench*, kernbench
 bench/               bench.c (throughput), kernbench.c (kernels)
 corpus/              deterministic generated images + generator
 scripts/             bootstrap_toolchain, env, build_opt
