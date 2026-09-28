@@ -33,7 +33,8 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist/${{ matrix.target }}
-          cp zig-out/lib/libstb-image-opt.a dist/${{ matrix.target }}/
+          # Linux/macOS produce libstb-image-opt.a; Windows produces stb-image-opt.lib.
+          cp zig-out/lib/* dist/${{ matrix.target }}/
           cp src/stb_image.h dist/${{ matrix.target }}/
           (cd dist && tar czf stb-image-opt-${{ matrix.target }}.tar.gz ${{ matrix.target }})
       - uses: actions/upload-artifact@v4
